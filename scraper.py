@@ -36,12 +36,15 @@ def get_follower_count(username):
         print(f"Failed to scrape profile for {username}")
         return "N/A"
 
+    # Print out the HTML content
+    print(response.text)
+    
     soup = BeautifulSoup(response.text, "html.parser")
     script_tags = soup.find_all("script")
     
+    # Look for a key named "followerCount" in any script tag
     for script in script_tags:
-        pattern = r'{"count":(\d+),"user":"' + re.escape(username) + r'"}'
-        match = re.search(pattern, script.text)
+        match = re.search(r'"followerCount":\s*(\d+)', script.text)
         if match:
             return match.group(1)
 
@@ -71,12 +74,16 @@ def get_user_details(username):
         "Followers": get_follower_count(username)  # Scrape followers
     }
 
-    # Fetch project count
+    # Fetch project count; check for X-Total-Count header
     project_url = SCRATCH_API_PROJECTS.format(username)
     project_response = requests.get(project_url, headers=HEADERS)
     if project_response.status_code == 200:
-        projects = project_response.json()
-        user_info["Projects Created"] = len(projects)
+        total_projects = project_response.headers.get("X-Total-Count")
+        if total_projects:
+            user_info["Projects Created"] = int(total_projects)
+        else:
+            projects = project_response.json()
+            user_info["Projects Created"] = len(projects)
     else:
         user_info["Projects Created"] = "N/A"
 
@@ -90,7 +97,7 @@ def save_to_file(data, filename="scratch_users.txt"):
             file.write(f"User ID: {user['User ID']}\n")
             file.write(f"Joined: {user['Joined']}\n")
             file.write(f"About Me: {user['About Me']}\n")
-            file.write(f"What I'm Working On: {user['What I'm Working On']}\n")
+            file.write(f"""What I'm Working On: {user["What I'm Working On"]}\n""")
             file.write(f"Country: {user['Country']}\n")
             file.write(f"Profile Image: {user['Profile Image']}\n")
             file.write(f"Followers: {user['Followers']}\n")
