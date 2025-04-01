@@ -9,11 +9,11 @@ from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 
 def create_driver():
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    opts = webdriver.ChromeOptions()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
 def check_user_exists(username):
     driver = create_driver()
@@ -31,8 +31,7 @@ def check_user_exists(username):
 def get_following_users(username):
     driver = create_driver()
     try:
-        url = f"https://scratch.mit.edu/users/{username}/following/"
-        driver.get(url)
+        driver.get(f"https://scratch.mit.edu/users/{username}/following/")
         time.sleep(2)
         body = driver.find_element(By.TAG_NAME, "body")
         for _ in range(5):
@@ -46,33 +45,41 @@ def get_following_users(username):
     finally:
         driver.quit()
 
-async def process_user(queue, visited, executor):
+async def process_user(queue, visited, executor, file_lock):
     loop = asyncio.get_running_loop()
     while True:
         username = await queue.get()
         if username is None:
-            queue.task_done()
+            await queue.put(None)
             break
-        exists = await loop.run_in_executor(executor, check_user_exists, username)
-        if exists:
-            following = await loop.run_in_executor(executor, get_following_users, username)
-            print(f"📌 {username} follows {len(following)}: {following}")
-            for user in following:
-                if user not in visited:
-                    visited.add(user)
-                    await queue.put(user)
-        queue.task_done()
+        try:
+            exists = await loop.run_in_executor(executor, check_user_exists, username)
+            if exists:
+                followers = await loop.run_in_executor(executor, get_following_users, username)
+                print(f"📌 {username} follows {len(followers)}: {followers}")
+                async with file_lock:
+                    with open("following_data.txt", "a", encoding="utf-8") as f:
+                        f.write(f"{username} follows {len(followers)}: {', '.join(followers)}\n")
+                for user in followers:
+                    if user not in visited:
+                        visited.add(user)
+                        await queue.put(user)
+        except Exception as ex:
+            print(f"Error processing {username}: {ex}")
+        finally:
+            queue.task_done()
 
 async def main():
-    initial_users = ["superjolt", "griffpatch", "johnm", "mres", "natalie", "ScratchCat", "HollowGoblin", "chipm0nk", "GonSanVi", "ProdigyZeta7"]
+    initial = ["superjolt", "griffpatch", "johnm", "mres", "natalie", "ScratchCat", "HollowGoblin", "chipm0nk", "GonSanVi", "ProdigyZeta7"]
     queue = asyncio.Queue()
-    visited = set(initial_users)
-    for user in initial_users:
+    visited = set(initial)
+    for user in initial:
         await queue.put(user)
+    file_lock = asyncio.Lock()
     max_workers = os.cpu_count() * 4
     executor = ThreadPoolExecutor(max_workers=max_workers)
-    workers = [asyncio.create_task(process_user(queue, visited, executor)) for _ in range(max_workers // 2)]
-    await queue.join()  # Runs indefinitely unless manually stopped
+    workers = [asyncio.create_task(process_user(queue, visited, executor, file_lock)) for _ in range(max_workers // 2)]
+    await queue.join()
     for w in workers:
         w.cancel()
     await asyncio.gather(*workers, return_exceptions=True)
